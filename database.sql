@@ -17,12 +17,8 @@ CREATE TABLE users (
     email_verified BOOLEAN DEFAULT false,
     -- Profile information
     birth_year INTEGER,
-    bio TEXT,
     profile_picture_url VARCHAR(255),
-    location VARCHAR(100),
-    website VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     -- Constraints
     CONSTRAINT username_format CHECK (username ~ '^[a-zA-Z0-9_]+$'), -- Only allow letters, numbers, and underscores
     CONSTRAINT email_format CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
