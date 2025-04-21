@@ -1,5 +1,14 @@
 const { Pool } = require('pg');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
+// Log environment variables (without sensitive data)
+console.log('Database Configuration:');
+console.log('Host:', process.env.DB_HOST);
+console.log('Port:', process.env.DB_PORT);
+console.log('Database:', process.env.DB_NAME);
+console.log('User:', process.env.DB_USER);
+console.log('Password length:', process.env.DB_PASSWORD ? process.env.DB_PASSWORD.length : 0);
 
 const pool = new Pool({
   user: process.env.DB_USER,
@@ -12,7 +21,9 @@ const pool = new Pool({
 // Test the connection
 pool.connect((err, client, release) => {
   if (err) {
-    return console.error('Error acquiring client', err.stack);
+    console.error('Error acquiring client:', err.message);
+    console.error('Error stack:', err.stack);
+    return;
   }
   console.log('Successfully connected to PostgreSQL database');
   release();

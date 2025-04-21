@@ -5,7 +5,17 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+  dest: 'uploads/',
+  fileFilter: (req, file, cb) => {
+    // Accept audio/webm and other audio formats
+    if (file.mimetype.startsWith('audio/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only audio files are allowed'));
+    }
+  }
+});
 const db = require('./db');
 
 const app = express();
@@ -14,7 +24,7 @@ const app = express();
 app.use(cors({
   origin: ['http://localhost:3000', 'http://localhost:3001'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type']
 }));
 
 app.use(express.json());
@@ -735,7 +745,330 @@ app.get('/api/songs/:id/similar', async (req, res) => {
   }
 });
 
+// Get all artists with song counts and genres
+app.get('/api/artists', async (req, res) => {
+  try {
+    console.log("Fetching artists...");
+    const result = await db.query(`
+      SELECT DISTINCT ON (a.id)
+        a.id,
+        a.name,
+        a.image_url,
+        COUNT(s.id) as song_count,
+        STRING_AGG(DISTINCT g.name, ', ') as genres
+      FROM artists a
+      LEFT JOIN songs s ON s.artist_id = a.id
+      LEFT JOIN genres g ON s.genre_id = g.id
+      GROUP BY a.id, a.name, a.image_url
+      ORDER BY a.id
+    `);
+    
+    console.log(`Found ${result.rows.length} artists`);
+    
+    const formattedArtists = result.rows.map(artist => ({
+      id: artist.id,
+      name: artist.name,
+      image_url: artist.image_url,
+      song_count: parseInt(artist.song_count),
+      genres: artist.genres ? artist.genres.split(', ') : []
+    }));
+    
+    res.json(formattedArtists);
+  } catch (error) {
+    console.error('Error fetching artists:', error);
+    res.status(500).json({ error: 'Failed to fetch artists' });
+  }
+});
+
+// Audio recognition endpoint
+app.post('/api/recognition/match', upload.single('audio'), async (req, res) => {
+  try {
+    console.log('Received audio data for recognition');
+    if (!req.file) {
+      console.log('No audio data provided');
+      return res.status(400).json({ error: 'No audio data provided' });
+    }
+    
+    console.log('Processing audio data:', req.file.path);
+    
+    // Use the Python script for audio feature extraction
+    const pythonScript = path.join(__dirname, 'audio_recognizer.py');
+    if (!fs.existsSync(pythonScript)) {
+      console.error('Python script not found:', pythonScript);
+      return res.status(500).json({ error: 'Audio recognition service not properly configured' });
+    }
+    
+    const pythonProcess = spawn('python', [pythonScript, req.file.path]);
+    
+    let output = '';
+    let errorOutput = '';
+    
+    pythonProcess.stdout.on('data', (data) => {
+      console.log('Python stdout:', data.toString());
+      output += data.toString();
+    });
+    
+    pythonProcess.stderr.on('data', (data) => {
+      console.error('Python stderr:', data.toString());
+      errorOutput += data.toString();
+    });
+    
+    pythonProcess.on('close', async (code) => {
+      console.log('Python process exited with code:', code);
+      
+      // Clean up temporary file
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (err) {
+        console.error('Error deleting temporary file:', err);
+      }
+      
+      if (code !== 0) {
+        console.error('Python script error:', errorOutput);
+        return res.status(500).json({ error: 'Failed to process audio: ' + errorOutput });
+      }
+      
+      try {
+        // Parse the JSON output from Python script
+        const features = JSON.parse(output.trim());
+        console.log('Extracted features:', features);
+        
+        if (features.error) {
+          return res.status(500).json({ error: features.error });
+        }
+
+        // Get songs with features from database
+        console.log('Querying database for songs with features');
+        const result = await db.query(`
+          SELECT s.id, s.title, s.features, a.name as artist_name, s.image_url
+          FROM songs s
+          LEFT JOIN artists a ON s.artist_id = a.id
+          WHERE s.features IS NOT NULL
+        `);
+        
+        console.log(`Found ${result.rows.length} songs with features`);
+        
+        const matches = [];
+        for (const song of result.rows) {
+          if (song.features) {
+            console.log('Comparing with song:', song.title);
+            console.log('Song features:', song.features);
+            
+            const similarity = computeSimilarity(features, song.features);
+            console.log(`Similarity for ${song.title}: ${similarity}`);
+            if (similarity > 0.5) {  // Lowered threshold due to DTW
+              matches.push({
+                id: song.id,
+                title: song.title,
+                artist_name: song.artist_name,
+                image_url: song.image_url,
+                similarity: similarity
+              });
+            }
+          }
+        }
+        
+        // Sort matches by similarity
+        matches.sort((a, b) => b.similarity - a.similarity);
+        console.log('Top matches:', matches.slice(0, 5));
+        
+        res.json({ matches: matches.slice(0, 5) });
+      } catch (error) {
+        console.error('Error processing matches:', error);
+        res.status(500).json({ error: 'Failed to process matches: ' + error.message });
+      }
+    });
+  } catch (error) {
+    console.error('Error in song recognition:', error);
+    res.status(500).json({ error: 'Failed to process audio: ' + error.message });
+  }
+});
+
+// Get search history
+app.get('/api/search-history', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    const result = await db.query(`
+      SELECT id, query, search_type, song_identified, results_count, created_at
+      FROM search_history
+      WHERE user_id = $1 AND created_at >= $2
+      ORDER BY created_at DESC
+    `, [userId, thirtyDaysAgo]);
+    
+    const history = result.rows.map(row => ({
+      id: row.id,
+      query: row.query,
+      type: row.search_type,
+      songIdentified: row.song_identified,
+      results: row.results_count,
+      timestamp: formatTimestamp(row.created_at)
+    }));
+    
+    res.json(history);
+  } catch (error) {
+    console.error('Error fetching search history:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Save search history
+app.post('/api/search-history', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { query, type = 'text', songIdentified = null } = req.body;
+    
+    const result = await db.query(`
+      INSERT INTO search_history (user_id, query, search_type, song_identified, created_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      RETURNING id
+    `, [userId, query, type, songIdentified]);
+    
+    res.json({ id: result.rows[0].id });
+  } catch (error) {
+    console.error('Error saving search history:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Helper function to compute similarity between audio features
+function computeSimilarity(features1, features2) {
+  try {
+    console.log('Comparing features:', {
+      features1: features1,
+      features2: features2
+    });
+
+    // Parse features if they're strings
+    const f1 = typeof features1 === 'string' ? JSON.parse(features1) : features1;
+    const f2 = typeof features2 === 'string' ? JSON.parse(features2) : features2;
+
+    // Convert features to arrays
+    const f1Array = [
+      ...f1.mfcc,
+      f1.tempo,
+      ...f1.chroma,
+      f1.spectral_rolloff,
+      f1.spectral_centroid,
+      f1.zero_crossing_rate
+    ];
+    const f2Array = [
+      ...f2.mfcc,
+      f2.tempo,
+      ...f2.chroma,
+      f2.spectral_rolloff,
+      f2.spectral_centroid,
+      f2.zero_crossing_rate
+    ];
+    
+    // Compute Dynamic Time Warping (DTW) distance
+    const dtwDistance = computeDTW(f1Array, f2Array);
+    
+    // Convert DTW distance to similarity score (lower distance = higher similarity)
+    const similarity = 1 / (1 + dtwDistance);
+    console.log('Computed similarity:', similarity);
+    return similarity;
+  } catch (error) {
+    console.error('Error computing similarity:', error);
+    return 0.0;
+  }
+}
+
+// Dynamic Time Warping implementation
+function computeDTW(seq1, seq2) {
+  const n = seq1.length;
+  const m = seq2.length;
+  
+  // Create cost matrix
+  const costMatrix = Array(n + 1).fill().map(() => Array(m + 1).fill(Infinity));
+  costMatrix[0][0] = 0;
+  
+  // Fill cost matrix
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const cost = Math.abs(seq1[i - 1] - seq2[j - 1]);
+      costMatrix[i][j] = cost + Math.min(
+        costMatrix[i - 1][j],     // insertion
+        costMatrix[i][j - 1],     // deletion
+        costMatrix[i - 1][j - 1]  // match
+      );
+    }
+  }
+  
+  return costMatrix[n][m];
+}
+
+// Helper function to format timestamp
+function formatTimestamp(date) {
+  const now = new Date();
+  const diff = now - date;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  
+  if (minutes < 60) {
+    return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  } else if (hours < 24) {
+    return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  } else if (days === 1) {
+    return 'Yesterday';
+  } else if (days < 7) {
+    return `${days} day${days === 1 ? '' : 's'} ago`;
+  } else {
+    return date.toLocaleDateString();
+  }
+}
+
+// Handle song skip
+app.post('/api/songs/:id/skip', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId, skipTimeSeconds } = req.body;
+    
+    if (!userId || skipTimeSeconds === undefined) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    const conn = await db.getConnection();
+    try {
+      // Begin transaction
+      await conn.beginTransaction();
+
+      // Update or insert the skip record
+      const query = `
+        INSERT INTO user_song_interactions 
+          (user_id, song_id, skip, skip_time_seconds, last_played) 
+        VALUES (?, ?, true, ?, NOW())
+        ON DUPLICATE KEY UPDATE 
+          skip = true,
+          skip_time_seconds = ?,
+          last_played = NOW()
+      `;
+      
+      await conn.query(query, [userId, id, skipTimeSeconds, skipTimeSeconds]);
+
+      // Commit transaction
+      await conn.commit();
+      
+      res.json({ message: 'Skip recorded successfully' });
+    } catch (error) {
+      // Rollback on error
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+  } catch (error) {
+    console.error('Error recording skip:', error);
+    res.status(500).json({ error: 'Failed to record skip' });
+  }
+});
+
+// Determine which port to use based on how the server is started
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`API available at http://localhost:${PORT}/api`);

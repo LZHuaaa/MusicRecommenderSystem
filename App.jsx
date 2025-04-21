@@ -4,6 +4,7 @@ import ArtistDetail from './components/ArtistDetail/ArtistDetail';
 import Navbar from './components/Layout/Navbar';
 import MusicPlayer from './components/Playback/MusicPlayer';
 import SongDetail from './components/SongDetail/SongDetail';
+import { AuthProvider } from './contexts/AuthContext';
 import { MusicProvider } from './contexts/MusicContext';
 import Home from './pages/Home';
 import Library from './pages/Library';
@@ -17,29 +18,31 @@ import SearchHistory from './pages/SearchHistory';
 
 function App() {
   return (
-    <MusicProvider>
-      <Router>
-        <div className="min-h-screen bg-background text-foreground">
-          <Navbar />
-          <main className="container mx-auto px-4 py-8">
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/search" element={<Search />} />
-              <Route path="/library" element={<Library />} />
-              <Route path="/playlists" element={<Playlists />} />
-              <Route path="/recommendations" element={<Recommendations />} />
-              <Route path="/search-history" element={<SearchHistory />} />
-              <Route path="/profile" element={<Profile />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
-              <Route path="/song/:id" element={<SongDetail />} />
-              <Route path="/artist/:id" element={<ArtistDetail />} />
-            </Routes>
-          </main>
-          <MusicPlayer />
-        </div>
-      </Router>
-    </MusicProvider>
+    <AuthProvider>
+      <MusicProvider>
+        <Router>
+          <div className="min-h-screen bg-background text-foreground">
+            <Navbar />
+            <main className="container mx-auto px-4 py-8">
+              <Routes>
+                <Route path="/" element={<Home />} />
+                <Route path="/search" element={<Search />} />
+                <Route path="/library" element={<Library />} />
+                <Route path="/playlists" element={<Playlists />} />
+                <Route path="/recommendations" element={<Recommendations />} />
+                <Route path="/search-history" element={<SearchHistory />} />
+                <Route path="/profile" element={<Profile />} />
+                <Route path="/login" element={<Login />} />
+                <Route path="/register" element={<Register />} />
+                <Route path="/song/:id" element={<SongDetail />} />
+                <Route path="/artist/:id" element={<ArtistDetail />} />
+              </Routes>
+            </main>
+            <MusicPlayer />
+          </div>
+        </Router>
+      </MusicProvider>
+    </AuthProvider>
   );
 }
 

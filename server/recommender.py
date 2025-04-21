@@ -2,12 +2,13 @@ import pandas as pd
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import StandardScaler
 import psycopg2
 from dotenv import load_dotenv
 import os
 import sys
 import json
-from sklearn.preprocessing import StandardScaler
+from datetime import datetime
 
 load_dotenv()
 
@@ -30,58 +31,190 @@ def get_songs_data():
             g.name as genre_name,
             s.mood,
             s.tempo,
+            s.danceability,
+            s.energy,
+            s.valence,
+            s.acousticness,
+            s.instrumentalness,
+            s.liveness,
+            s.speechiness,
             a.name as artist_name,
             al.title as album_title,
             s.year,
             s.plays,
             s.image_url,
-            s.audio_url
+            s.audio_url,
+            s.created_at
         FROM songs s
         LEFT JOIN artists a ON s.artist_id = a.id
         LEFT JOIN albums al ON s.album_id = al.id
         LEFT JOIN genres g ON s.genre_id = g.id
         """
-        print("Executing query...", file=sys.stderr)
         df = pd.read_sql_query(query, conn)
-        print(f"Retrieved {len(df)} songs from database", file=sys.stderr)
-        print("Sample of song IDs:", df['id'].head().tolist(), file=sys.stderr)
         conn.close()
         return df
     except Exception as e:
         print(f"Error in get_songs_data: {str(e)}", file=sys.stderr)
         return pd.DataFrame()
 
-def create_song_features(df):
+def normalize_audio_features(df):
+    audio_features = ['tempo', 'danceability', 'energy', 'valence', 
+                     'acousticness', 'instrumentalness', 'liveness', 'speechiness']
     
-    df = df.fillna('')
-    
-    # Combine text features for similarity calculation
-    df['features'] = df['title'] + ' ' + df['artist_name'] + ' ' + df['genre_name'] + ' ' + df['mood']
+    # Normalize audio features
+    scaler = StandardScaler()
+    df[audio_features] = scaler.fit_transform(df[audio_features].fillna(0))
     return df
 
-def get_recommendations(song_id, num_recommendations=5):
-    df = get_songs_data()
-    df = create_song_features(df)
+def create_song_features(df):
+    df = df.fillna('')
     
-    # Get the target song
-    target_song = df[df['id'] == song_id]
-    if target_song.empty:
-        return []
+    # Text features for TF-IDF
+    df['text_features'] = df['title'] + ' ' + df['artist_name'] + ' ' + df['genre_name'] + ' ' + df['mood']
     
-    # Get similar songs based on features
+    # Audio features (already normalized)
+    audio_features = ['tempo', 'danceability', 'energy', 'valence', 
+                     'acousticness', 'instrumentalness', 'liveness', 'speechiness']
+    
+    # Recency feature (days since creation)
+    df['created_at'] = pd.to_datetime(df['created_at'])
+    df['recency'] = (datetime.now() - df['created_at']).dt.days
+    
+    return df
+
+def get_skip_patterns(user_id=None):
+    try:
+        conn = get_db_connection()
+        query = """
+        SELECT 
+            song_id,
+            skip_type,
+            skip_time,
+            created_at
+        FROM skip_history
+        WHERE user_id = %s OR user_id IS NULL
+        """
+        df = pd.read_sql_query(query, conn, params=(user_id,))
+        conn.close()
+        return df
+    except Exception as e:
+        print(f"Error in get_skip_patterns: {str(e)}", file=sys.stderr)
+        return pd.DataFrame()
+
+def calculate_content_score(target_song, candidate_songs):
+    # Text similarity
     tfidf = TfidfVectorizer(stop_words='english')
-    tfidf_matrix = tfidf.fit_transform(df['features'])
+    tfidf_matrix = tfidf.fit_transform(candidate_songs['text_features'])
+    text_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix)[0]
     
-    # Calculate similarity
-    target_idx = target_song.index[0]
-    cosine_sim = cosine_similarity(tfidf_matrix[target_idx:target_idx+1], tfidf_matrix)
+    # Audio feature similarity
+    audio_features = ['tempo', 'danceability', 'energy', 'valence', 
+                     'acousticness', 'instrumentalness', 'liveness', 'speechiness']
+    audio_sim = cosine_similarity(
+        target_song[audio_features].values.reshape(1, -1),
+        candidate_songs[audio_features].values
+    )[0]
     
-    # Get top recommendations
-    sim_scores = list(enumerate(cosine_sim[0]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-    song_indices = [i[0] for i in sim_scores[1:num_recommendations+1]]
+    # Genre and artist similarity
+    genre_sim = (candidate_songs['genre_name'] == target_song['genre_name']).astype(float)
+    artist_sim = (candidate_songs['artist_name'] == target_song['artist_name']).astype(float)
     
-    return df.iloc[song_indices].to_dict('records')
+    # Combine scores with weights
+    content_score = (
+        0.3 * text_sim + 
+        0.3 * audio_sim + 
+        0.2 * genre_sim + 
+        0.2 * artist_sim
+    )
+    
+    return content_score
+
+def calculate_collaborative_score(song_id, skip_patterns):
+    if skip_patterns.empty:
+        return 0
+    
+    # Calculate skip rate
+    song_skips = skip_patterns[skip_patterns['song_id'] == song_id]
+    if song_skips.empty:
+        return 1
+    
+    skip_rate = len(song_skips) / len(skip_patterns)
+    
+    # Time-based penalty
+    recent_skips = song_skips[song_skips['created_at'] > (datetime.now() - pd.Timedelta(days=30))]
+    recent_penalty = len(recent_skips) / len(song_skips) if len(song_skips) > 0 else 0
+    
+    # Skip type penalty
+    quick_skips = song_skips[song_skips['skip_type'] == 'quick']
+    quick_penalty = len(quick_skips) / len(song_skips) if len(song_skips) > 0 else 0
+    
+    # Calculate final score
+    collaborative_score = 1 - (0.4 * skip_rate + 0.3 * recent_penalty + 0.3 * quick_penalty)
+    return max(0, collaborative_score)
+
+def get_hybrid_recommendations(song_id=None, user_id=None, num_recommendations=10):
+    # Get data
+    df = get_songs_data()
+    df = normalize_audio_features(df)
+    df = create_song_features(df)
+    skip_patterns = get_skip_patterns(user_id)
+    
+    if song_id:
+        # Get target song
+        target_song = df[df['id'] == song_id].iloc[0]
+        candidate_songs = df[df['id'] != song_id]
+        
+        # Calculate scores
+        content_scores = calculate_content_score(target_song, candidate_songs)
+        collaborative_scores = candidate_songs['id'].apply(
+            lambda x: calculate_collaborative_score(x, skip_patterns)
+        )
+        
+        # Popularity and recency scores
+        popularity_scores = candidate_songs['plays'] / candidate_songs['plays'].max()
+        recency_scores = 1 - (candidate_songs['recency'] / candidate_songs['recency'].max())
+        
+        # Combine scores
+        hybrid_scores = (
+            0.4 * content_scores +
+            0.4 * collaborative_scores +
+            0.1 * popularity_scores +
+            0.1 * recency_scores
+        )
+        
+        # Get top recommendations
+        top_indices = hybrid_scores.nlargest(num_recommendations).index
+        recommendations = candidate_songs.iloc[top_indices]
+    else:
+        # Initial recommendations
+        popularity_scores = df['plays'] / df['plays'].max()
+        recency_scores = 1 - (df['recency'] / df['recency'].max())
+        collaborative_scores = df['id'].apply(
+            lambda x: calculate_collaborative_score(x, skip_patterns)
+        )
+        
+        # Combine scores
+        hybrid_scores = (
+            0.5 * collaborative_scores +
+            0.3 * popularity_scores +
+            0.2 * recency_scores
+        )
+        
+        # Get top recommendations
+        top_indices = hybrid_scores.nlargest(num_recommendations).index
+        recommendations = df.iloc[top_indices]
+    
+    return recommendations.to_dict('records')
+
+# Update existing functions to use the new hybrid system
+def get_recommendations(song_id, num_recommendations=5):
+    return get_hybrid_recommendations(song_id=song_id, num_recommendations=num_recommendations)
+
+def get_initial_recommendations(num_recommendations=10):
+    return get_hybrid_recommendations(num_recommendations=num_recommendations)
+
+def get_similar_songs(song_id, n_recommendations=4):
+    return get_hybrid_recommendations(song_id=song_id, num_recommendations=n_recommendations)
 
 def search_songs(query, num_results=10):
     df = get_songs_data()
@@ -89,7 +222,7 @@ def search_songs(query, num_results=10):
     
     # Create TF-IDF matrix
     tfidf = TfidfVectorizer(stop_words='english')
-    tfidf_matrix = tfidf.fit_transform(df['features'])
+    tfidf_matrix = tfidf.fit_transform(df['text_features'])
     
     # Transform query
     query_vector = tfidf.transform([query])
@@ -103,185 +236,6 @@ def search_songs(query, num_results=10):
     song_indices = [i[0] for i in sim_scores[:num_results]]
     
     return df.iloc[song_indices].to_dict('records')
-
-def get_initial_recommendations(num_recommendations=10):
-    df = get_songs_data()
-    df = create_song_features(df)
-    
-    # Convert year to numeric, handling any non-numeric values
-    df['year'] = pd.to_numeric(df['year'], errors='coerce')
-    
-    # For initial recommendations, we'll use a combination of:
-    # 1. Most played songs (popularity)
-    # 2. Recent songs (recency)
-    # 3. Songs with high similarity to popular songs (content-based)
-    
-    # Get most played songs
-    popular_songs = df.nlargest(5, 'plays')
-    
-    # Get recent songs (excluding NaN years)
-    recent_songs = df.dropna(subset=['year']).nlargest(5, 'year')
-    
-    # Combine popular and recent songs for similarity calculation
-    candidate_songs = pd.concat([popular_songs, recent_songs]).drop_duplicates()
-    
-    # Create TF-IDF matrix only for candidate songs
-    tfidf = TfidfVectorizer(stop_words='english')
-    tfidf_matrix = tfidf.fit_transform(candidate_songs['features'])
-    
-    # Calculate similarity between candidate songs
-    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
-    
-    # Get recommendations based on popular songs
-    popular_recommendations = []
-    for idx, song in enumerate(popular_songs.iterrows()):
-        sim_scores = list(enumerate(cosine_sim[idx]))
-        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-        song_indices = [i[0] for i in sim_scores[1:3]]  # Get top 2 similar songs
-        popular_recommendations.extend(candidate_songs.iloc[song_indices].to_dict('records'))
-    
-    # Combine all recommendations
-    all_recommendations = (
-        popular_songs.to_dict('records') +
-        recent_songs.to_dict('records') +
-        popular_recommendations
-    )
-    
-    # Remove duplicates and limit to requested number
-    seen_ids = set()
-    unique_recommendations = []
-    for song in all_recommendations:
-        if song['id'] not in seen_ids:
-            seen_ids.add(song['id'])
-            unique_recommendations.append(song)
-            if len(unique_recommendations) >= num_recommendations:
-                break
-    
-    return unique_recommendations
-
-def get_similar_songs(song_id, n_recommendations=4):
-    try:
-        # Convert song_id to integer
-        song_id = int(song_id)
-        print(f"Looking for song with ID: {song_id}", file=sys.stderr)
-        
-        conn = get_db_connection()
-        # First, fetch only the target song to get its details
-        target_query = """
-        SELECT 
-            s.id,
-            s.title,
-            g.name as genre_name,
-            s.mood,
-            s.tempo,
-            a.name as artist_name,
-            al.title as album_title,
-            s.year,
-            s.image_url,
-            s.audio_url
-        FROM songs s
-        LEFT JOIN artists a ON s.artist_id = a.id
-        LEFT JOIN albums al ON s.album_id = al.id
-        LEFT JOIN genres g ON s.genre_id = g.id
-        WHERE s.id = %s
-        """
-        
-        with conn.cursor() as cur:
-            cur.execute(target_query, (song_id,))
-            target_song = cur.fetchone()
-            
-            if not target_song:
-                print(f"Song with ID {song_id} not found", file=sys.stderr)
-                return []
-            
-            # Extract key features from target song
-            target_genre = target_song[2]  # genre_name
-            target_mood = target_song[3]   # mood
-            target_artist = target_song[5] # artist_name
-            target_year = target_song[7]   # year
-            
-            # Query for similar songs
-            similar_query = """
-            WITH ranked_songs AS (
-                SELECT DISTINCT
-                    s.id,
-                    s.title,
-                    g.name as genre_name,
-                    s.mood,
-                    s.tempo,
-                    a.name as artist_name,
-                    al.title as album_title,
-                    s.year,
-                    s.plays,
-                    s.image_url,
-                    s.audio_url,
-                    CASE 
-                        WHEN g.name = %s AND a.name = %s THEN 1
-                        WHEN g.name = %s THEN 2
-                        WHEN a.name = %s THEN 2
-                        WHEN s.mood = %s THEN 3
-                        ELSE 4
-                    END as similarity_rank
-                FROM songs s
-                LEFT JOIN artists a ON s.artist_id = a.id
-                LEFT JOIN albums al ON s.album_id = al.id
-                LEFT JOIN genres g ON s.genre_id = g.id
-                WHERE s.id != %s
-                AND (
-                    g.name = %s
-                    OR a.name = %s
-                    OR (s.mood = %s AND s.mood IS NOT NULL)
-                    OR (s.year IS NOT NULL AND %s IS NOT NULL AND ABS(s.year - %s) <= 3)
-                )
-            )
-            SELECT * FROM ranked_songs
-            ORDER BY similarity_rank, plays DESC
-            LIMIT %s
-            """
-            
-            params = (
-                target_genre, target_artist,
-                target_genre,
-                target_artist,
-                target_mood,
-                song_id,
-                target_genre,
-                target_artist,
-                target_mood,
-                target_year, target_year,
-                n_recommendations
-            )
-            
-            cur.execute(similar_query, params)
-            similar_songs = cur.fetchall()
-            
-            # Convert to list of dictionaries
-            result = []
-            for song in similar_songs:
-                result.append({
-                    'id': song[0],
-                    'title': song[1],
-                    'genre_name': song[2],
-                    'mood': song[3],
-                    'tempo': float(song[4]) if song[4] else None,
-                    'artist_name': song[5],
-                    'album_title': song[6],
-                    'year': int(song[7]) if song[7] else None,
-                    'plays': int(song[8]) if song[8] else 0,
-                    'image_url': song[9],
-                    'audio_url': song[10]
-                })
-            
-            return result
-            
-    except Exception as e:
-        print(f"Error in get_similar_songs: {str(e)}", file=sys.stderr)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        return []
-    finally:
-        if conn:
-            conn.close()
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:

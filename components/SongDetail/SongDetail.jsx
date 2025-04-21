@@ -6,7 +6,6 @@ import {
     PauseIcon,
     PlayIcon,
     PlusCircleIcon,
-    ShareIcon,
     SparklesIcon,
     UserIcon,
     XMarkIcon
@@ -14,25 +13,37 @@ import {
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
 import { motion } from 'framer-motion';
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { API_URL } from '../../config';
 import { useMusic } from '../../contexts/MusicContext';
+import { getProperImageUrl, handleImageError } from '../../utils/imageUtils';
 
 const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onTogglePlay, onToggleLike, onPlay }) => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { currentSong, isPlaying: contextIsPlaying, togglePlay: contextTogglePlay, playSong } = useMusic();
   const [song, setSong] = useState(propSong || null);
   const [loading, setLoading] = useState(!propSong);
   const [error, setError] = useState(null);
   const [similarSongs, setSimilarSongs] = useState([]);
+  const [localIsPlaying, setLocalIsPlaying] = useState(false);
+
+  
 
   // Determine if we're in modal mode or route mode
   const isModal = !!propSong;
-  
+
   // Use the global player state if we're not in modal mode
   const isPlaying = isModal ? propIsPlaying : (contextIsPlaying && currentSong?.id === song?.id);
   const togglePlay = isModal ? onTogglePlay : contextTogglePlay;
+
+  // Update local playing state when contextIsPlaying changes
+  useEffect(() => {
+    if (song && currentSong?.id === song.id) {
+      setLocalIsPlaying(contextIsPlaying);
+    }
+  }, [contextIsPlaying, currentSong, song]);
 
   useEffect(() => {
     if (!isModal && id) {
@@ -65,7 +76,7 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
   useEffect(() => {
     const fetchSimilarSongs = async () => {
       if (!song?.id) return;
-      
+
       try {
         setLoading(true);
         console.log('Fetching similar songs for:', song.id);
@@ -102,12 +113,74 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  const handlePlayClick = () => {
+  const handlePlayClick = async () => {
     if (isPlaying) {
       togglePlay();
     } else {
-      playSong(song);
+      if (isModal) {
+        await onPlay();
+      } else {
+        await playSong(song);
+      }
     }
+  };
+
+  const handleLikeClick = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    
+    const token = localStorage.getItem('authToken');
+    console.log('like clicked, auth status:', token);
+    
+    if (!token) {
+      navigate('/login', { state: { from: location.pathname } });
+      return;
+    }
+    
+    if (onToggleLike) {
+      onToggleLike(song.id);
+    }
+  };
+
+  const handleAddToPlaylistClick = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    
+    const token = localStorage.getItem('authToken');
+    console.log('Add to playlist token value:', token);
+    
+    if (!token) {
+      console.log('No token, redirecting...');
+      // Try multiple navigation methods
+      try {
+        // Method 1: React Router navigation
+        navigate('/login', { state: { from: location.pathname } });
+        
+        // Method 2: Programmatic navigation as fallback
+        setTimeout(() => {
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
+        }, 100);
+        
+        // Method 3: Force reload
+        setTimeout(() => {
+          if (window.location.pathname !== '/login') {
+            window.location.replace('/login');
+          }
+        }, 200);
+      } catch (error) {
+        console.error('Navigation error:', error);
+        window.location.href = '/login';
+      }
+      return;
+    }
+    
+    console.log('Token exists, would add to playlist');
   };
 
   const handleSimilarSongClick = async (similarSong, e) => {
@@ -126,13 +199,13 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
       </div>
     </div>
   );
-  
+
   if (error) return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 overflow-auto flex items-center justify-center">
       <div className="text-white text-lg">Error: {error}</div>
     </div>
   );
-  
+
   if (!song) return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 overflow-auto flex items-center justify-center">
       <div className="text-white text-lg">Song not found</div>
@@ -140,14 +213,14 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
   );
 
   return (
-    <motion.div 
+    <motion.div
       className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 overflow-auto flex items-start justify-center pt-8"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       onClick={onClose}
     >
-      <motion.div 
+      <motion.div
         className="container mx-auto p-3 max-w-4xl relative mt-4 mb-8"
         initial={{ scale: 0.95, y: 20 }}
         animate={{ scale: 1, y: 0 }}
@@ -156,30 +229,31 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
       >
         <div className="flex justify-between items-center mb-3">
           <div className="text-white text-xs">
-            Playing from <span className="text-primary font-medium">Recently Played</span>
+      
           </div>
         </div>
-      
+
         <div className="bg-white rounded-xl overflow-hidden shadow-xl border border-gray-200 relative">
-          <button 
+          <button
             onClick={onClose}
             className="absolute top-4 right-4 w-12 h-12 rounded-full bg-purple-500 hover:bg-purple-600 flex items-center justify-center transition-all z-10 shadow-md"
             aria-label="Close"
           >
             <XMarkIcon className="w-7 h-7 text-white" />
           </button>
-          
+
           <div className="md:flex">
             <div className="md:w-1/3 p-4">
               <div className="aspect-square rounded-lg overflow-hidden shadow-lg border border-gray-200">
-                <img 
-                  src={song.image_url} 
+                <img
+                  src={getProperImageUrl(song.image_url)}
                   alt={song.title}
                   className="w-full h-full object-cover"
+                  onError={handleImageError}
                 />
               </div>
             </div>
-            
+
             <div className="md:w-2/3 p-4 flex flex-col justify-between">
               <div>
                 <div className="mb-2 flex items-center">
@@ -192,7 +266,7 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
                     </span>
                   )}
                 </div>
-                
+
                 <h1 className="text-2xl md:text-3xl font-bold mb-1 text-gray-900">{song.title}</h1>
                 <p className="text-lg text-gray-700 flex items-center">
                   <UserIcon className="w-4 h-4 mr-1.5 inline-block text-gray-500" />
@@ -204,36 +278,42 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
                   </p>
                 )}
               </div>
-              
+
               <div className="mt-4">
                 <div className="flex items-center space-x-3">
-                  <button 
+                  <button
                     onClick={handlePlayClick}
                     className="p-3 rounded-full bg-primary text-white hover:bg-primary/90 transition-colors shadow-lg"
                   >
-                    {isPlaying ? 
-                      <PauseIcon className="w-6 h-6" /> : 
+                    {isPlaying ?
+                      <PauseIcon className="w-6 h-6" /> :
                       <PlayIcon className="w-6 h-6" />
                     }
                   </button>
-                  
-                  <button 
-                    onClick={() => onToggleLike && onToggleLike(song.id)}
+
+                  <button
+                    onClick={handleLikeClick}
                     className="p-2 rounded-full bg-gray-200 hover:bg-gray-300 transition-colors"
                   >
-                    {song.liked ? 
-                      <HeartSolidIcon className="w-5 h-5 text-red-500" /> : 
+                    {song.liked ?
+                      <HeartSolidIcon className="w-5 h-5 text-red-500" /> :
                       <HeartIcon className="w-5 h-5 text-gray-700" />
                     }
                   </button>
-                  
-                  <button className="p-2 rounded-full bg-gray-200 hover:bg-gray-300 transition-colors">
+
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleAddToPlaylistClick(e);
+                    }}
+                    className="p-2 rounded-full bg-gray-200 hover:bg-gray-300 transition-colors"
+                  >
                     <PlusCircleIcon className="w-5 h-5 text-gray-700" />
                   </button>
-                  
-                  <button className="p-2 rounded-full bg-gray-200 hover:bg-gray-300 transition-colors">
-                    <ShareIcon className="w-5 h-5 text-gray-700" />
-                  </button>
+
+
+
                 </div>
               </div>
 
@@ -245,7 +325,7 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
                     <p className="font-medium text-sm text-gray-800">{song.genre_name || 'Unknown'}</p>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center space-x-2">
                   <CalendarIcon className="w-4 h-4 text-primary" />
                   <div>
@@ -253,7 +333,7 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
                     <p className="font-medium text-sm text-gray-800">{song.year || 'Unknown'}</p>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center space-x-2">
                   <ClockIcon className="w-4 h-4 text-primary" />
                   <div>
@@ -261,7 +341,7 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
                     <p className="font-medium text-sm text-gray-800">{formatTime(song.duration)}</p>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center space-x-2">
                   <SparklesIcon className="w-4 h-4 text-primary" />
                   <div>
@@ -272,7 +352,7 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
               </div>
             </div>
           </div>
-          
+
           {/* Similar Songs Section */}
           <div className="p-4 border-t border-gray-200">
             <h3 className="text-lg font-bold mb-3 flex items-center text-gray-900">
@@ -284,19 +364,20 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
             ) : similarSongs.length > 0 ? (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 {similarSongs.map((similarSong) => (
-                  <div 
-                    key={similarSong.id} 
+                  <div
+                    key={similarSong.id}
                     className="bg-gray-100 p-2 rounded-lg hover:bg-gray-200 transition-colors cursor-pointer relative group"
                     onClick={(e) => handleSimilarSongClick(similarSong, e)}
                   >
                     <div className="aspect-square rounded overflow-hidden mb-1.5 relative">
-                      <img 
-                        src={similarSong.image_url} 
-                        alt={similarSong.title} 
+                      <img
+                        src={getProperImageUrl(similarSong.image_url)}
+                        alt={similarSong.title}
                         className="w-full h-full object-cover"
+                        onError={handleImageError}
                       />
                       <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <button 
+                        <button
                           type="button"
                           className="p-2 rounded-full bg-primary text-white hover:bg-primary/90 transition-colors"
                           onClick={(e) => handleSimilarSongClick(similarSong, e)}
@@ -318,12 +399,6 @@ const SongDetail = ({ song: propSong, onClose, isPlaying: propIsPlaying, onToggl
       </motion.div>
     </motion.div>
   );
-};
-
-const getYouTubeId = (url) => {
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-  const match = url.match(regExp);
-  return (match && match[2].length === 11) ? match[2] : null;
 };
 
 export default SongDetail;

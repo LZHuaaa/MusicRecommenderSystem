@@ -1,3 +1,4 @@
+import { Dialog } from '@headlessui/react';
 import { PlayIcon } from '@heroicons/react/24/solid';
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useContext, useEffect, useState } from 'react';
@@ -5,9 +6,8 @@ import { useNavigate } from 'react-router-dom';
 import ArtistDetail from '../components/ArtistDetail/ArtistDetail';
 import { HeaderVisibilityContext } from '../components/Layout/Layout';
 import SongDetail from '../components/SongDetail/SongDetail';
+import { API_URL } from '../config';
 import { useMusic } from '../contexts/MusicContext';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
 
 const Home = () => {
   const navigate = useNavigate();
@@ -22,6 +22,7 @@ const Home = () => {
   const [error, setError] = useState(null);
   const [sectionTitle, setSectionTitle] = useState('Recently Played');
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   
   // Access the header visibility context
   const { setHeaderVisible } = useContext(HeaderVisibilityContext);
@@ -53,6 +54,21 @@ const opts = {
   }
 };
 
+  // Set up user session to simulate being logged in
+  useEffect(() => {
+    const userSession = {
+      token: 'user-logged-in-token',
+      user: {
+        id: 929,
+        name: 'Demo User',
+        email: 'demo@example.com'
+      }
+    };
+    localStorage.setItem('authToken', userSession.token);
+    localStorage.setItem('userId', userSession.user.id);
+    localStorage.setItem('user', JSON.stringify(userSession.user));
+  }, []);
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -62,11 +78,19 @@ const opts = {
 
         // Only fetch playlists if user is logged in
         if (userId) {
-          const playlistsResponse = await fetch(`${API_URL}/users/${userId}/playlists`);
+          console.log('Fetching playlists for user:', userId);
+          const playlistsUrl = `${API_URL}/users/${userId}/playlists`;
+          console.log('Playlists URL:', playlistsUrl);
+          
+          const playlistsResponse = await fetch(playlistsUrl);
+          console.log('Playlists response status:', playlistsResponse.status);
+          
           if (!playlistsResponse.ok) {
             throw new Error(`Playlists API error: ${playlistsResponse.status}`);
           }
           const playlists = await playlistsResponse.json();
+          console.log('Received playlists:', playlists);
+          
           setFeaturedPlaylists(playlists.map(playlist => ({
             id: playlist.id,
             title: playlist.name,
@@ -75,23 +99,25 @@ const opts = {
             isPublic: playlist.is_public
           })));
         } else {
-          // Set empty playlists for non-logged in users
+          console.log('No userId found, skipping playlists fetch');
           setFeaturedPlaylists([]);
         }
 
         // Fetch songs based on user status
-        let songsEndpoint = `${API_URL}/songs/recent`;
-        if (userId) {
-          songsEndpoint = `${API_URL}/users/${userId}/recently-played`;
-        }
-
+        let songsEndpoint = userId ? 
+          `${API_URL}/users/${userId}/recently-played` : 
+          `${API_URL}/api/songs/recent`;
+        
+        console.log('Songs endpoint:', songsEndpoint);
         const songsResponse = await fetch(songsEndpoint);
+        console.log('Songs response status:', songsResponse.status);
+
         if (!songsResponse.ok) {
           throw new Error(`Songs API error: ${songsResponse.status}`);
         }
 
-        console.log('Songs response:', songsResponse);
         const songsData = await songsResponse.json();
+        console.log('Received songs data:', songsData);
         
         // Set section title
         if(userId)
@@ -309,6 +335,48 @@ const opts = {
     setHeaderVisible(isVisible);
   };
 
+  // Add these utility functions at the top of the component
+  const getYouTubeID = (url) => {
+    if (!url) return null;
+    // Match YouTube URL patterns
+    const patterns = [
+      /(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([^&]+)/,
+      /(?:https?:\/\/)?(?:www\.)?youtu\.be\/([^?]+)/,
+      /(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([^?]+)/,
+      /vi(?:_webp)?\/([^/]+)\//  // Match both vi/ and vi_webp/ patterns
+    ];
+
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match) return match[1];
+    }
+    return null;
+  };
+
+  const getProperThumbnailUrl = (url) => {
+    if (!url) return '/images/default-music-icon.svg';
+    
+    const videoId = getYouTubeID(url);
+    if (videoId) {
+      // Use mqdefault instead of maxresdefault as it's more reliable
+      return `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
+    }
+    return url;
+  };
+
+  // Update the handleImageError function
+  const handleImageError = (e) => {
+    e.target.onerror = null; 
+    e.target.src = '/images/default-music-icon.svg';
+  };
+
+  const handlePlaylistAccess = () => {
+    const userId = localStorage.getItem('userId');
+    if (!userId) {
+      setShowLoginPrompt(true);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -334,9 +402,10 @@ const opts = {
               transition={{ duration: 0.7 }}
             >
               <img
-                src={song.image_url}
+                src={getProperThumbnailUrl(song.image_url)}
                 alt={song.title}
-                className="w-full h-full object-cover"
+          className="w-full h-full object-cover"
+                onError={handleImageError}
               />
               <div className="absolute inset-0 bg-gradient-to-r from-primary/80 to-transparent" />
             </motion.div>
@@ -376,9 +445,10 @@ const opts = {
         </div>
       </section>
 
-      {/* Featured Playlists */}
+      {/* Featured Playlists Section */}
       <section>
         <h2 className="text-2xl font-bold mb-4">Featured Playlists</h2>
+        {localStorage.getItem('userId') ? (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {featuredPlaylists.map((playlist) => (
             <motion.div
@@ -387,9 +457,10 @@ const opts = {
               className="relative group rounded-xl overflow-hidden shadow-lg"
             >
               <img
-                src={playlist.imageUrl}
+                  src={getProperThumbnailUrl(playlist.imageUrl)}
                 alt={playlist.title}
                 className="w-full h-48 object-cover"
+                  onError={handleImageError}
               />
               <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                 <PlayIcon className="w-12 h-12 text-white" />
@@ -401,6 +472,17 @@ const opts = {
             </motion.div>
           ))}
         </div>
+        ) : (
+          <div 
+            className="bg-card rounded-xl p-8 text-center cursor-pointer hover:bg-card/80 transition-colors"
+            onClick={handlePlaylistAccess}
+          >
+            <h3 className="text-xl font-semibold mb-2">Login to Access Playlists</h3>
+            <p className="text-muted-foreground">
+              Sign in to discover and create your own playlists
+            </p>
+          </div>
+        )}
       </section>
 
       {/* Dynamic Songs Section */}
@@ -416,9 +498,10 @@ const opts = {
             >
               <div className="relative aspect-square rounded-lg overflow-hidden">
                 <img
-                  src={song.image_url}
+                  src={getProperThumbnailUrl(song.image_url)}
                   alt={song.title}
                   className="w-full h-full object-cover"
+                  onError={handleImageError}
                 />
                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <button 
@@ -456,9 +539,10 @@ const opts = {
               </div>
               <div className="w-12 h-12 relative mr-3">
                 <img 
-                  src={song.image_url} 
+                  src={getProperThumbnailUrl(song.image_url)}
                   alt={song.title}
                   className="w-full h-full object-cover rounded"
+                  onError={handleImageError}
                 />
                 <div className="absolute inset-0 bg-black/40 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center">
                   <button 
@@ -500,9 +584,10 @@ const opts = {
             >
               <div className="relative aspect-square rounded-full overflow-hidden">
                 <img
-                  src={artist.imageUrl}
+                  src={getProperThumbnailUrl(artist.imageUrl)}
                   alt={artist.name}
                   className="w-full h-full object-cover"
+                  onError={handleImageError}
                 />
                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <PlayIcon className="w-8 h-8 text-white" />
@@ -526,15 +611,15 @@ const opts = {
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50"
           >
-            <SongDetail 
-              song={selectedSong}
+          <SongDetail 
+            song={selectedSong}
               onClose={() => setSelectedSong(null)}
-              isPlaying={isPlaying}
-              onTogglePlay={handleTogglePlay}
-              onToggleLike={handleToggleLike}
-              onVisibilityChange={handleHeaderVisibility}
+            isPlaying={isPlaying}
+            onTogglePlay={handleTogglePlay}
+            onToggleLike={handleToggleLike}
+            onVisibilityChange={handleHeaderVisibility}
               onPlay={() => handlePlaySong(selectedSong)}
-            />
+          />
           </motion.div>
         )}
       </AnimatePresence>
@@ -554,6 +639,42 @@ const opts = {
           />
         )}
       </AnimatePresence>
+
+      {/* Login Prompt Modal */}
+      <Dialog
+        open={showLoginPrompt}
+        onClose={() => setShowLoginPrompt(false)}
+        className="relative z-50"
+      >
+        <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <Dialog.Panel className="mx-auto max-w-sm rounded bg-white p-6">
+            <Dialog.Title className="text-lg font-medium leading-6 text-gray-900 mb-4">
+              Login Required
+            </Dialog.Title>
+            <Dialog.Description className="text-sm text-gray-500 mb-4">
+              Please log in to access playlists and personalized recommendations.
+            </Dialog.Description>
+            <div className="mt-4 flex justify-end space-x-3">
+              <button
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                onClick={() => setShowLoginPrompt(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-md hover:bg-primary/90"
+                onClick={() => {
+                  setShowLoginPrompt(false);
+                  navigate('/login');
+                }}
+              >
+                Login
+              </button>
+            </div>
+          </Dialog.Panel>
+        </div>
+      </Dialog>
     </div>
   );
 };

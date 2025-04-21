@@ -1,72 +1,149 @@
-import React, { useState, useRef } from 'react';
-import { motion } from 'framer-motion';
-import { 
-  MicrophoneIcon, 
-  MusicalNoteIcon,
-  StopIcon,
+import {
   ArrowPathIcon,
   CheckCircleIcon,
-  XCircleIcon 
+  MicrophoneIcon,
+  MusicalNoteIcon,
+  StopIcon,
+  XCircleIcon
 } from '@heroicons/react/24/outline';
+import { motion } from 'framer-motion';
+import React, { useRef, useState } from 'react';
 
 const MusicRecognition = () => {
   const [recognitionMode, setRecognitionMode] = useState('idle'); // idle, recording, humming, processing, success, error
   const [recordingTime, setRecordingTime] = useState(0);
   const [recognizedSong, setRecognizedSong] = useState(null);
+  const [error, setError] = useState(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const timerRef = useRef(null);
 
-  // Mock data for recognized song
-  const mockRecognizedSong = {
-    title: 'Bohemian Rhapsody',
-    artist: 'Queen',
-    album: 'A Night at the Opera',
-    year: 1975,
-    albumCover: 'https://source.unsplash.com/random/300x300?queen',
-  };
+  const startRecording = async (mode) => {
+    try {
+      setRecognitionMode(mode);
+      setRecordingTime(0);
+      setRecognizedSong(null);
+      setError(null);
+      audioChunksRef.current = [];
 
-  const startRecording = (mode) => {
-    setRecognitionMode(mode);
-    setRecordingTime(0);
-    setRecognizedSong(null);
-    
-    // Start timer for recording
-    timerRef.current = setInterval(() => {
-      setRecordingTime(prev => {
-        // Mock recognition completion after 5 seconds
-        if (prev >= 5) {
-          clearInterval(timerRef.current);
-          processRecording();
-          return 0;
-        }
-        return prev + 1;
+      console.log('Requesting microphone access...');
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 44100
+        } 
       });
-    }, 1000);
+      console.log('Microphone access granted');
+
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        console.log('Data available:', event.data.size);
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      // Request data every 100ms
+      mediaRecorder.start(100);
+      console.log('MediaRecorder started');
+      
+      // Start timer for recording
+      timerRef.current = setInterval(() => {
+        setRecordingTime(prev => {
+          if (prev >= 8) {
+            stopRecording();
+            return 0;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch (err) {
+      console.error('Error starting recording:', err);
+      setError('Failed to access microphone. Please check your permissions.');
+      setRecognitionMode('error');
+    }
   };
 
   const stopRecording = () => {
+    console.log('Stopping recording...');
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Audio track stopped');
+      });
+    }
     clearInterval(timerRef.current);
     processRecording();
   };
 
-  const processRecording = () => {
+  const processRecording = async () => {
     setRecognitionMode('processing');
     
-    // Simulate API call delay
-    setTimeout(() => {
-      // 90% chance of success
-      if (Math.random() < 0.9) {
-        setRecognitionMode('success');
-        setRecognizedSong(mockRecognizedSong);
-      } else {
-        setRecognitionMode('error');
+    try {
+      console.log('Creating audio blob from chunks');
+      console.log('Number of chunks:', audioChunksRef.current.length);
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' });
+      console.log('Audio blob size:', audioBlob.size);
+      
+      if (audioBlob.size === 0) {
+        throw new Error('No audio data captured. Please try again.');
       }
-    }, 2000);
+
+      const formData = new FormData();
+      formData.append('audio', audioBlob);
+      console.log('FormData created with audio blob');
+
+      console.log('Sending request to recognition endpoint');
+      const response = await fetch('http://localhost:3000/api/recognition/match', {
+        method: 'POST',
+        body: formData
+      });
+
+      console.log('Response status:', response.status);
+      
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.error('Received non-JSON response:', await response.text());
+        throw new Error('Server returned an invalid response format');
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Recognition error:', errorData);
+        throw new Error(errorData.error || 'Failed to process audio');
+      }
+
+      const data = await response.json();
+      console.log('Recognition response:', data);
+      
+      if (data.matches && data.matches.length > 0) {
+        console.log('Found matches:', data.matches);
+        setRecognitionMode('success');
+        setRecognizedSong(data.matches[0]);
+      } else {
+        console.log('No matches found');
+        setRecognitionMode('error');
+        setError('No matching song found. Try again with a clearer recording.');
+      }
+    } catch (err) {
+      console.error('Recognition error:', err);
+      setRecognitionMode('error');
+      setError(err.message || 'Failed to process audio. Please try again.');
+    }
   };
 
   const reset = () => {
     setRecognitionMode('idle');
     setRecordingTime(0);
     setRecognizedSong(null);
+    setError(null);
   };
 
   const formatTime = (seconds) => {
@@ -189,7 +266,7 @@ const MusicRecognition = () => {
       )}
 
       {/* Success State */}
-      {recognitionMode === 'success' && (
+      {recognitionMode === 'success' && recognizedSong && (
         <motion.div 
           variants={itemVariants}
           className="flex flex-col items-center"
@@ -199,14 +276,16 @@ const MusicRecognition = () => {
           
           <div className="w-full max-w-sm bg-secondary/50 rounded-xl p-4 flex items-center space-x-4">
             <img 
-              src={recognizedSong.albumCover} 
+              src={recognizedSong.image_url || 'https://source.unsplash.com/random/300x300?music'} 
               alt={recognizedSong.title} 
               className="w-16 h-16 rounded object-cover"
             />
             <div>
               <h4 className="font-semibold">{recognizedSong.title}</h4>
-              <p className="text-sm text-muted-foreground">{recognizedSong.artist}</p>
-              <p className="text-xs text-muted-foreground">{recognizedSong.album} ({recognizedSong.year})</p>
+              <p className="text-sm text-muted-foreground">{recognizedSong.artist_name}</p>
+              <p className="text-xs text-muted-foreground">
+                Match confidence: {Math.round(recognizedSong.similarity * 100)}%
+              </p>
             </div>
           </div>
           
@@ -237,7 +316,7 @@ const MusicRecognition = () => {
           <XCircleIcon className="w-16 h-16 text-red-500 mb-6" />
           <h3 className="text-xl font-semibold mb-2">No Match Found</h3>
           <p className="text-muted-foreground text-center mb-6">
-            We couldn't identify the song. Try again with a clearer recording or a different section of the song.
+            {error || "We couldn't identify the song. Try again with a clearer recording or a different section of the song."}
           </p>
           <button 
             onClick={reset}

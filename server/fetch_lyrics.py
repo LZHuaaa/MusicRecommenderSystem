@@ -45,6 +45,7 @@ def get_songs_from_db():
             FROM songs s
             JOIN artists a ON s.artist_id = a.id
             LEFT JOIN genres g ON s.genre_id = g.id
+            where s.id >= 176215
             ORDER BY s.id
         """
         df = pd.read_sql_query(query, conn)

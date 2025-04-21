@@ -13,6 +13,11 @@ export const MusicProvider = ({ children }) => {
   const [isYouTube, setIsYouTube] = useState(false);
   const [youtubePlayer, setYoutubePlayer] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [guestRecommendations, setGuestRecommendations] = useState([]);
+  const [skippedSongs, setSkippedSongs] = useState([]);
+  const [repeatMode, setRepeatMode] = useState('off'); // 'off', 'all', or 'one'
+  const [isShuffle, setIsShuffle] = useState(false);
+  const [shuffledIndices, setShuffledIndices] = useState([]);
 
   const audioRef = useRef(new Audio());
   const youtubeRef = useRef(null);
@@ -91,9 +96,7 @@ export const MusicProvider = ({ children }) => {
     };
 
     const handleError = (e) => {
-      console.error('Audio error event:', e);
-      console.error('Audio error code:', e.target.error?.code);
-      console.error('Audio error message:', e.target.error?.message);
+      console.error('Audio error:', e);
       setIsPlaying(false);
       setIsLoading(false);
     };
@@ -111,89 +114,122 @@ export const MusicProvider = ({ children }) => {
     };
   }, []);
 
-  const playAudioImmediately = (audio) => {
-    console.log('Attempting to play audio immediately');
-    const playPromise = audio.play();
-    
-    if (playPromise !== undefined) {
-      playPromise
-        .then(() => {
-          console.log('Audio playback started successfully');
-          setIsLoading(false);
-        })
-        .catch(error => {
-          console.error('Playback was prevented:', error);
-          // Most browsers require user interaction before playing audio
-          setIsPlaying(false);
-          setIsLoading(false);
-        });
-    }
-  };
-
-  const handleAudioPlayback = (song) => {
+  const handleAudioPlayback = async (song) => {
+    console.log('=== Audio Playback Debug ===');
     setIsYouTube(false);
     setIsLoading(true);
     
-    // Clean up previous audio
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = ""; // Important: clear the source
-      audioRef.current.load(); // Force reload
+    try {
+      // Clean up previous audio
+      if (audioRef.current) {
+        console.log('Cleaning up previous audio...');
+        audioRef.current.pause();
+        audioRef.current.src = ""; // Important: clear the source
+        audioRef.current.load(); // Force reload
+      }
+
+      // Create a new audio element
+      console.log('Creating new audio element...');
+      const audio = new Audio();
+      
+      // Set up listeners first
+      audio.addEventListener('loadedmetadata', () => {
+        console.log('Audio metadata loaded, duration:', audio.duration);
+        setDuration(audio.duration);
+      });
+
+      audio.addEventListener('canplay', () => {
+        console.log('Audio can play now');
+        playAudioImmediately(audio);
+      });
+
+      audio.addEventListener('playing', () => {
+        console.log('Audio is now playing');
+        setIsPlaying(true);
+        setIsLoading(false);
+      });
+
+      audio.addEventListener('pause', () => {
+        console.log('Audio paused');
+        setIsPlaying(false);
+      });
+
+      audio.addEventListener('timeupdate', () => {
+        setCurrentTime(audio.currentTime);
+      });
+
+      audio.addEventListener('ended', () => {
+        console.log('Audio ended');
+        setIsPlaying(false);
+        playNext();
+      });
+
+      audio.addEventListener('error', (e) => {
+        console.error('Audio error:', {
+          code: e.target.error?.code,
+          message: e.target.error?.message,
+          url: song.audio_url
+        });
+        setIsPlaying(false);
+        setIsLoading(false);
+      });
+
+      // Set the source and volume
+      console.log('Setting audio source:', song.audio_url);
+      audio.src = song.audio_url;
+      audio.volume = volume;
+      audioRef.current = audio;
+      
+      // Start loading the audio
+      console.log('Loading audio...');
+      await audio.load();
+
+      // Try to play immediately
+      try {
+        console.log('Attempting to play audio...');
+        await audio.play();
+        console.log('Audio playback started successfully');
+        setIsPlaying(true);
+        setIsLoading(false);
+      } catch (error) {
+        if (error.name === 'NotAllowedError') {
+          console.log('Autoplay prevented by browser, waiting for user interaction');
+          // Keep the audio loaded but don't set error state
+          setIsLoading(false);
+        } else {
+          console.error('Error playing audio:', error);
+          setIsPlaying(false);
+          setIsLoading(false);
+        }
+      }
+    } catch (error) {
+      console.error('Error in handleAudioPlayback:', error);
+      setIsPlaying(false);
+      setIsLoading(false);
     }
+  };
 
-    // Create a new audio element
-    const audio = new Audio();
-    
-    // Set up listeners first
-    audio.addEventListener('loadedmetadata', () => {
-      console.log('Audio metadata loaded, duration:', audio.duration);
-      setDuration(audio.duration);
-    });
-
-    audio.addEventListener('canplay', () => {
-      console.log('Audio can play now');
-      playAudioImmediately(audio);
-    });
-
-    audio.addEventListener('playing', () => {
-      console.log('Audio is now playing');
-      setIsPlaying(true);
-      setIsLoading(false);
-    });
-
-    audio.addEventListener('pause', () => {
-      console.log('Audio paused');
-      setIsPlaying(false);
-    });
-
-    audio.addEventListener('timeupdate', () => {
-      setCurrentTime(audio.currentTime);
-    });
-
-    audio.addEventListener('ended', () => {
-      console.log('Audio ended');
-      setIsPlaying(false);
-      playNext();
-    });
-
-    audio.addEventListener('error', (e) => {
-      console.error('Audio error code:', e.target.error?.code);
-      console.error('Audio error message:', e.target.error?.message);
-      console.error('Error with audio URL:', song.audio_url);
-      setIsPlaying(false);
-      setIsLoading(false);
-    });
-
-    // Set the source
-    audio.src = song.audio_url;
-    audio.volume = volume;
-    audioRef.current = audio;
-    
-    // Start loading the audio
-    audio.load();
-    
-    // Try to play immediately (may be blocked by browsers)
-    playAudioImmediately(audio);
+  const playAudioImmediately = async (audio) => {
+    console.log('=== Immediate Playback Attempt ===');
+    try {
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        await playPromise;
+        console.log('Audio playback started successfully');
+        setIsLoading(false);
+        setIsPlaying(true);
+      }
+    } catch (error) {
+      if (error.name === 'NotAllowedError') {
+        console.log('Autoplay prevented by browser, requires user interaction');
+        setIsLoading(false);
+        // Don't set isPlaying to false here, let the UI handle it
+      } else {
+        console.error('Error in playAudioImmediately:', error);
+        setIsPlaying(false);
+        setIsLoading(false);
+      }
+    }
   };
 
   const handleYouTubePlayback = (song) => {
@@ -278,37 +314,99 @@ export const MusicProvider = ({ children }) => {
   };
 
   const playSong = async (song) => {
+    console.log('=== PlaySong Debug ===');
+    console.log('Attempting to play song:', song);
+    
     if (!song) {
       console.error('No song provided to playSong function');
       return;
     }
 
-    console.log('Playing song:', song);
-    
     if (!song.audio_url) {
-      console.error('Song is missing audio_url property:', song);
-      return;
-    }
-    
-    console.log('Audio URL:', song.audio_url);
-
-    // If same song is already playing, just toggle play state
-    if (currentSong && currentSong.id === song.id) {
-      console.log('Same song selected, toggling play state');
-      togglePlay();
+      console.error('Song is missing audio_url:', song);
       return;
     }
 
-    setCurrentSong(song);
-    setCurrentTime(0); // Reset current time when starting a new song
+    try {
+      // If same song is already playing, just toggle play state
+      if (currentSong && currentSong.id === song.id) {
+        console.log('Same song selected, toggling play state');
+        togglePlay();
+        return;
+      }
 
-    // Check if the URL is a YouTube URL
-    const isYouTubeUrl = song.audio_url.includes('youtube.com') || song.audio_url.includes('youtu.be');
-    
-    if (isYouTubeUrl) {
-      handleYouTubePlayback(song);
-    } else {
-      handleAudioPlayback(song);
+      console.log('Setting up new song playback...');
+      setIsLoading(true);
+      
+      // Update current song and find its index in the current playlist
+      const currentPlaylist = getCurrentPlaylist();
+      const newIndex = findCurrentIndex(song, currentPlaylist);
+      
+      setCurrentSong(song);
+      setCurrentIndex(newIndex >= 0 ? newIndex : 0);
+      setCurrentTime(0);
+
+      // Check if it's a YouTube URL
+      const youtubeId = extractYouTubeId(song.audio_url);
+      
+      if (youtubeId) {
+        console.log('Detected YouTube URL, initializing YouTube player...');
+        handleYouTubePlayback(song);
+      } else {
+        console.log('Setting up audio playback...');
+        // Clean up previous audio
+        if (audioRef.current) {
+          console.log('Cleaning up previous audio...');
+          audioRef.current.pause();
+          audioRef.current.src = "";
+          audioRef.current.load();
+        }
+
+        // Create new audio element
+        console.log('Creating new audio element...');
+        const audio = new Audio();
+        audio.src = song.audio_url;
+        audio.volume = volume;
+        audioRef.current = audio;
+
+        // Set up event listeners
+        audio.addEventListener('canplay', () => {
+          console.log('Audio can play, attempting to start playback...');
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise
+              .then(() => {
+                console.log('Audio playback started successfully');
+                setIsPlaying(true);
+                setIsLoading(false);
+              })
+              .catch(error => {
+                console.error('Error playing audio:', error);
+                setIsPlaying(false);
+                setIsLoading(false);
+              });
+          }
+        });
+
+        audio.addEventListener('error', (e) => {
+          console.error('Audio error event triggered:', {
+            code: e.target.error?.code,
+            message: e.target.error?.message,
+            url: song.audio_url
+          });
+          setIsPlaying(false);
+          setIsLoading(false);
+        });
+
+        // Start loading
+        console.log('Starting audio load...');
+        await audio.load();
+        console.log('Audio load completed');
+      }
+    } catch (error) {
+      console.error('Error in playSong:', error);
+      setIsLoading(false);
+      setIsPlaying(false);
     }
   };
 
@@ -400,31 +498,59 @@ export const MusicProvider = ({ children }) => {
   };
 
   const playNext = () => {
-    if (playlist.length === 0) {
+    const currentPlaylist = getCurrentPlaylist();
+    console.log('Current playlist:', currentPlaylist);
+    console.log('Current index:', currentIndex);
+    
+    if (!currentPlaylist.length) {
       console.log('No playlist available to play next song');
       return;
     }
-    
-    const nextIndex = (currentIndex + 1) % playlist.length;
-    setCurrentIndex(nextIndex);
-    const nextSong = playlist[nextIndex];
-    
-    console.log('Playing next song:', nextSong);
-    playSong(nextSong);
-  };
 
-  const playPrevious = () => {
-    if (playlist.length === 0) {
-      console.log('No playlist available to play previous song');
+    // Record skip if there's a current song
+    if (currentSong) {
+      recordSkip(currentSong.id);
+    }
+
+    const nextIndex = getNextIndex(currentIndex, currentPlaylist.length);
+    console.log('Playing next song at index:', nextIndex);
+    
+    // If nextIndex is -1, we've reached the end with repeat off
+    if (nextIndex === -1) {
+      setIsPlaying(false);
       return;
     }
     
-    const prevIndex = (currentIndex - 1 + playlist.length) % playlist.length;
-    setCurrentIndex(prevIndex);
-    const prevSong = playlist[prevIndex];
+    const nextSong = currentPlaylist[nextIndex];
+    if (nextSong) {
+      setCurrentIndex(nextIndex);
+      playSong(nextSong);
+    }
+  };
+
+  const playPrevious = () => {
+    const currentPlaylist = getCurrentPlaylist();
+    console.log('Current playlist:', currentPlaylist);
+    console.log('Current index:', currentIndex);
     
-    console.log('Playing previous song:', prevSong);
-    playSong(prevSong);
+    if (!currentPlaylist.length) {
+      console.log('No playlist available to play previous song');
+      return;
+    }
+
+    // Record skip if there's a current song
+    if (currentSong) {
+      recordSkip(currentSong.id);
+    }
+
+    const prevIndex = getPreviousIndex(currentIndex, currentPlaylist.length);
+    console.log('Playing previous song at index:', prevIndex);
+    const prevSong = currentPlaylist[prevIndex];
+    
+    if (prevSong) {
+      setCurrentIndex(prevIndex);
+      playSong(prevSong);
+    }
   };
 
   const extractYouTubeId = (url) => {
@@ -436,21 +562,182 @@ export const MusicProvider = ({ children }) => {
     return (match && match[2].length === 11) ? match[2] : null;
   };
 
-  // Debug component - Move it outside the provider value
-  const DebugInfo = () => {
-    if (process.env.NODE_ENV !== 'development') return null;
+  // Function to check if user is logged in
+  const isUserLoggedIn = () => {
+    return !!localStorage.getItem('authToken');
+  };
 
-    return (
-      <div className="fixed top-20 right-4 bg-black/80 text-white p-2 rounded-lg text-xs z-50">
-        <div>Current Song: {currentSong?.title || 'None'}</div>
-        <div>Playing: {isPlaying ? 'Yes' : 'No'}</div>
-        <div>Current Time: {Math.floor(currentTime)}s</div>
-        <div>Duration: {Math.floor(duration)}s</div>
-        <div>Volume: {Math.round(volume * 100)}%</div>
-        <div>Loading: {isLoading ? 'Yes' : 'No'}</div>
-        <div>YouTube: {isYouTube ? 'Yes' : 'No'}</div>
-      </div>
-    );
+  // Function to get current playlist
+  const getCurrentPlaylist = () => {
+    // First check user's playlist
+    if (playlist.length > 0) {
+      return playlist;
+    }
+    // Then check guest recommendations
+    if (guestRecommendations.length > 0) {
+      return guestRecommendations;
+    }
+    // If we have a current song but no playlist, create a single-song playlist
+    if (currentSong) {
+      return [currentSong];
+    }
+    return [];
+  };
+
+  // Function to find current song index
+  const findCurrentIndex = (song, playlistToUse) => {
+    if (!song || !playlistToUse.length) return -1;
+    return playlistToUse.findIndex(s => s.id === song.id);
+  };
+
+  // Function to update guest recommendations
+  const updateGuestRecommendations = (recommendations) => {
+    if (!recommendations || !recommendations.length) return;
+    
+    setGuestRecommendations(recommendations);
+    
+    // If we're in guest mode and don't have a playlist, use these recommendations
+    if (!isUserLoggedIn() && playlist.length === 0) {
+      const currentPlaylist = getCurrentPlaylist();
+      if (currentPlaylist.length === 0) {
+        // If no current song, start with the first recommendation
+        if (!currentSong) {
+          setCurrentSong(recommendations[0]);
+          setCurrentIndex(0);
+        } else {
+          // If we have a current song, find its index in the new recommendations
+          const newIndex = findCurrentIndex(currentSong, recommendations);
+          setCurrentIndex(newIndex >= 0 ? newIndex : 0);
+        }
+      }
+    }
+  };
+
+  // Function to record a song skip
+  const recordSkip = (songId) => {
+    if (!songId) return;
+    
+    // Add to skipped songs array
+    setSkippedSongs(prev => {
+      if (prev.includes(songId)) return prev;
+      return [...prev, songId];
+    });
+
+    // If user is logged in, you could send to backend (commented out for now)
+    /*if (isUserLoggedIn()) {
+      fetch('/api/user-listening-history', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+        },
+        body: JSON.stringify({
+          songId,
+          skip: true
+        })
+      }).catch(console.error);
+    }*/
+  };
+
+  // Function to generate shuffled indices
+  const generateShuffledIndices = (length) => {
+    const indices = Array.from({ length }, (_, i) => i);
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+    return indices;
+  };
+
+  // Function to get next index based on repeat and shuffle settings
+  const getNextIndex = (currentIdx, length) => {
+    if (repeatMode === 'one') {
+      return currentIdx; // Stay on same song
+    }
+    
+    if (isShuffle) {
+      if (shuffledIndices.length !== length) {
+        // Generate new shuffle order if needed
+        setShuffledIndices(generateShuffledIndices(length));
+        return shuffledIndices[0];
+      }
+      // Find current position in shuffled array and get next
+      const currentPos = shuffledIndices.indexOf(currentIdx);
+      const nextPos = (currentPos + 1) % shuffledIndices.length;
+      return shuffledIndices[nextPos];
+    }
+    
+    // Normal sequential playback
+    const nextIdx = currentIdx + 1;
+    
+    // If we're at the end
+    if (nextIdx >= length) {
+      if (repeatMode === 'all') {
+        return 0; // Loop back to start
+      }
+      return -1; // Signal end of playlist
+    }
+    
+    return nextIdx;
+  };
+
+  // Function to get previous index based on repeat and shuffle settings
+  const getPreviousIndex = (currentIdx, length) => {
+    if (repeatMode === 'one') {
+      return currentIdx; // Stay on same song
+    }
+    
+    if (isShuffle) {
+      if (shuffledIndices.length !== length) {
+        setShuffledIndices(generateShuffledIndices(length));
+        return shuffledIndices[shuffledIndices.length - 1];
+      }
+      // Find current position in shuffled array and get previous
+      const currentPos = shuffledIndices.indexOf(currentIdx);
+      const prevPos = (currentPos - 1 + shuffledIndices.length) % shuffledIndices.length;
+      return shuffledIndices[prevPos];
+    }
+    
+    // Normal sequential playback
+    const prevIdx = currentIdx - 1;
+    
+    // If we're at the start
+    if (prevIdx < 0) {
+      if (repeatMode === 'all') {
+        return length - 1; // Loop to end
+      }
+      return 0; // Stay at start
+    }
+    
+    return prevIdx;
+  };
+
+  // Toggle repeat mode
+  const toggleRepeat = () => {
+    setRepeatMode(current => {
+      switch (current) {
+        case 'off':
+          return 'all';
+        case 'all':
+          return 'one';
+        case 'one':
+          return 'off';
+        default:
+          return 'off';
+      }
+    });
+  };
+
+  // Toggle shuffle mode
+  const toggleShuffle = () => {
+    setIsShuffle(prev => {
+      if (!prev) {
+        // Entering shuffle mode - generate initial shuffle order
+        const currentPlaylist = getCurrentPlaylist();
+        setShuffledIndices(generateShuffledIndices(currentPlaylist.length));
+      }
+      return !prev;
+    });
   };
 
   return (
@@ -462,16 +749,20 @@ export const MusicProvider = ({ children }) => {
       duration,
       volume,
       isLoading,
+      repeatMode,
+      isShuffle,
       playSong,
       togglePlay,
       playNext,
       playPrevious,
       addToPlaylist,
       updateTime,
-      updateVolume
+      updateVolume,
+      updateGuestRecommendations,
+      toggleRepeat,
+      toggleShuffle
     }}>
       {children}
-      {process.env.NODE_ENV === 'development' && <DebugInfo />}
     </MusicContext.Provider>
   );
 };

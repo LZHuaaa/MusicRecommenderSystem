@@ -1,94 +1,107 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
-import { 
-  MagnifyingGlassIcon, 
-  ClockIcon, 
-  TrashIcon,
-  ArrowPathIcon,
-  MusicalNoteIcon,
-  MicrophoneIcon,
-  XMarkIcon,
-  ChevronRightIcon
+import {
+    ArrowPathIcon,
+    ChevronRightIcon,
+    ClockIcon,
+    MagnifyingGlassIcon,
+    MicrophoneIcon,
+    MusicalNoteIcon,
+    TrashIcon,
+    XMarkIcon
 } from '@heroicons/react/24/outline';
 import { PlayIcon } from '@heroicons/react/24/solid';
+import { motion } from 'framer-motion';
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const SearchHistory = () => {
   const navigate = useNavigate();
-  const [searchHistoryItems, setSearchHistoryItems] = useState([
-    {
-      id: 1,
-      type: 'text',
-      query: 'dance pop songs 2023',
-      timestamp: '2 hours ago',
-      results: 156
-    },
-    {
-      id: 2,
-      type: 'voice',
-      query: 'play something by The Weeknd',
-      timestamp: 'Yesterday',
-      results: 42
-    },
-    {
-      id: 3,
-      type: 'recognition',
-      query: 'Song Recognition',
-      songIdentified: 'Blinding Lights - The Weeknd',
-      timestamp: 'Yesterday',
-      results: 1
-    },
-    {
-      id: 4,
-      type: 'text',
-      query: 'relaxing piano music',
-      timestamp: '3 days ago',
-      results: 230
-    },
-    {
-      id: 5,
-      type: 'voice',
-      query: 'show me rock songs from the 90s',
-      timestamp: '1 week ago',
-      results: 187
-    },
-    {
-      id: 6,
-      type: 'recognition',
-      query: 'Song Recognition',
-      songIdentified: 'Bohemian Rhapsody - Queen',
-      timestamp: '1 week ago',
-      results: 1
-    },
-    {
-      id: 7,
-      type: 'text',
-      query: 'running playlist upbeat',
-      timestamp: '2 weeks ago',
-      results: 78
-    },
-    {
-      id: 8,
-      type: 'text',
-      query: 'summer hits',
-      timestamp: '3 weeks ago',
-      results: 123
-    },
-    {
-      id: 9,
-      type: 'text',
-      query: 'acoustic covers',
-      timestamp: '1 month ago',
-      results: 95
-    },
-    {
-      id: 10,
-      type: 'voice',
-      query: 'play jazz music',
-      timestamp: '1 month ago',
-      results: 67
-    },
-  ]);
+  const [searchHistoryItems, setSearchHistoryItems] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
+
+  // Load search history on component mount
+  useEffect(() => {
+    loadSearchHistory();
+  }, []);
+
+  const loadSearchHistory = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const token = localStorage.getItem('token');
+      if (token) {
+        // Fetch from API for logged-in users
+        const response = await fetch(`${API_URL}/search-history`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch search history');
+        }
+
+        const data = await response.json();
+        setSearchHistoryItems(data);
+      } else {
+        // Load from localStorage for guest users
+        const storedHistory = localStorage.getItem('searchHistory');
+        if (storedHistory) {
+          setSearchHistoryItems(JSON.parse(storedHistory));
+        }
+      }
+    } catch (err) {
+      setError(err.message);
+      console.error('Error loading search history:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const saveSearchHistory = async (updatedHistory) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (token) {
+        // Save to API for logged-in users
+        const response = await fetch(`${API_URL}/search-history`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ history: updatedHistory })
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to save search history');
+        }
+      } else {
+        // Save to localStorage for guest users
+        localStorage.setItem('searchHistory', JSON.stringify(updatedHistory));
+      }
+    } catch (err) {
+      console.error('Error saving search history:', err);
+      setError(err.message);
+    }
+  };
+
+  const deleteHistoryItem = async (id) => {
+    const updatedHistory = searchHistoryItems.filter(item => item.id !== id);
+    setSearchHistoryItems(updatedHistory);
+    await saveSearchHistory(updatedHistory);
+  };
+
+  const clearAllHistory = async () => {
+    setSearchHistoryItems([]);
+    await saveSearchHistory([]);
+  };
+
+  const handleSearch = (query) => {
+    navigate(`/search?q=${encodeURIComponent(query)}`);
+  };
   
   // Function to group history by date
   const groupedHistory = searchHistoryItems.reduce((acc, item) => {
@@ -111,18 +124,6 @@ const SearchHistory = () => {
     acc[group].push(item);
     return acc;
   }, {});
-
-  const deleteHistoryItem = (id) => {
-    setSearchHistoryItems(searchHistoryItems.filter(item => item.id !== id));
-  };
-
-  const clearAllHistory = () => {
-    setSearchHistoryItems([]);
-  };
-
-  const handleSearch = (query) => {
-    navigate(`/search?q=${encodeURIComponent(query)}`);
-  };
 
   // Get icon based on search type
   const getSearchTypeIcon = (type) => {
@@ -156,6 +157,29 @@ const SearchHistory = () => {
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center p-8">
+        <p className="text-red-500 mb-4">{error}</p>
+        <button
+          onClick={loadSearchHistory}
+          className="flex items-center gap-2 mx-auto px-4 py-2 rounded-full bg-primary text-white hover:bg-primary/90"
+        >
+          <ArrowPathIcon className="w-5 h-5" />
+          <span>Retry</span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
       {/* Header */}
@@ -186,12 +210,7 @@ const SearchHistory = () => {
           <p className="text-gray-500 mb-6">
             Your search history will appear here after you search for songs, artists, or albums.
           </p>
-          <button 
-            onClick={() => navigate('/search')}
-            className="bg-primary text-white px-6 py-2 rounded-full hover:bg-primary/90 transition-colors"
-          >
-            Start Searching
-          </button>
+          
         </div>
       ) : (
         <div className="space-y-8">

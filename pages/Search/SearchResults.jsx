@@ -1,18 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { Tab } from '@headlessui/react';
 import { 
+    ClockIcon,
+    HeartIcon,
+    ListBulletIcon,
   MagnifyingGlassIcon, 
   MusicalNoteIcon, 
-  UserIcon, 
-  ListBulletIcon,
-  ClockIcon,
+    PauseIcon,
   PlayIcon,
-  PauseIcon,
-  HeartIcon
+    UserIcon
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
-import { Tab } from '@headlessui/react';
+import { motion } from 'framer-motion';
+import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
 
 function classNames(...classes) {
   return classes.filter(Boolean).join(' ');
@@ -21,6 +22,7 @@ function classNames(...classes) {
 const SearchResults = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { isAuthenticated } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState({
@@ -31,6 +33,8 @@ const SearchResults = () => {
   });
   const [selectedCategory, setSelectedCategory] = useState(0);
   const [currentlyPlaying, setCurrentlyPlaying] = useState(null);
+
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
 
   // Extract search query from URL params
   useEffect(() => {
@@ -53,164 +57,75 @@ const SearchResults = () => {
     }
   }, [location.search]);
 
-  // Mock search function - in a real app, this would call your backend API
-  const performSearch = (query) => {
+  const performSearch = async (query) => {
     setIsLoading(true);
     
-    // Simulate API delay
-    setTimeout(() => {
-      // Mock search results
-      const mockResults = {
-        songs: [
-          { 
-            id: 1, 
-            title: 'Blinding Lights', 
-            artist: 'The Weeknd', 
-            album: 'After Hours',
-            duration: '3:20',
-            imageUrl: 'https://source.unsplash.com/random/80x80?music=1',
-            liked: false 
-          },
-          { 
-            id: 2, 
-            title: 'Lights Out', 
-            artist: 'Fred Again..', 
-            album: 'Actual Life 3',
-            duration: '2:45',
-            imageUrl: 'https://source.unsplash.com/random/80x80?music=2',
-            liked: true 
-          },
-          { 
-            id: 3, 
-            title: 'Light of the Seven', 
-            artist: 'Ramin Djawadi', 
-            album: 'Game of Thrones: Season 6',
-            duration: '9:42',
-            imageUrl: 'https://source.unsplash.com/random/80x80?music=3',
-            liked: false 
-          },
-          { 
-            id: 4, 
-            title: 'City Lights', 
-            artist: 'White Lights', 
-            album: 'Metropolis',
-            duration: '4:15',
-            imageUrl: 'https://source.unsplash.com/random/80x80?music=4',
-            liked: false 
-          },
-          { 
-            id: 5, 
-            title: 'Northern Lights', 
-            artist: 'Aurora', 
-            album: 'All My Demons',
-            duration: '3:38',
-            imageUrl: 'https://source.unsplash.com/random/80x80?music=5',
-            liked: true 
-          },
-        ],
-        artists: [
-          { 
-            id: 101, 
-            name: 'The Weeknd', 
-            followers: '85.4M', 
-            imageUrl: 'https://source.unsplash.com/random/80x80?artist=1' 
-          },
-          { 
-            id: 102, 
-            name: 'Lights', 
-            followers: '1.2M', 
-            imageUrl: 'https://source.unsplash.com/random/80x80?artist=2' 
-          },
-          { 
-            id: 103, 
-            name: 'Light Year', 
-            followers: '356K', 
-            imageUrl: 'https://source.unsplash.com/random/80x80?artist=3' 
-          },
-        ],
-        albums: [
-          { 
-            id: 201, 
-            title: 'Blinding Lights - EP', 
-            artist: 'The Weeknd', 
-            year: 2020, 
-            imageUrl: 'https://source.unsplash.com/random/200x200?album=1' 
-          },
-          { 
-            id: 202, 
-            title: 'Light Switch', 
-            artist: 'Charlie Puth', 
-            year: 2022, 
-            imageUrl: 'https://source.unsplash.com/random/200x200?album=2' 
-          },
-          { 
-            id: 203, 
-            title: 'Lights Out', 
-            artist: 'Royal Blood', 
-            year: 2017, 
-            imageUrl: 'https://source.unsplash.com/random/200x200?album=3' 
-          },
-          { 
-            id: 204, 
-            title: 'In Search of Sunrise', 
-            artist: 'Tiësto', 
-            year: 2018, 
-            imageUrl: 'https://source.unsplash.com/random/200x200?album=4' 
-          },
-        ],
-        playlists: [
-          { 
-            id: 301, 
-            title: 'Chill Lights', 
-            creator: 'MusicMind', 
-            songCount: 45, 
-            imageUrl: 'https://source.unsplash.com/random/200x200?playlist=1' 
-          },
-          { 
-            id: 302, 
-            title: 'Lighting the Way', 
-            creator: 'Top Vibes', 
-            songCount: 32, 
-            imageUrl: 'https://source.unsplash.com/random/200x200?playlist=2' 
-          },
-          { 
-            id: 303, 
-            title: 'Light Rock Classics', 
-            creator: 'Rock Nation', 
-            songCount: 78, 
-            imageUrl: 'https://source.unsplash.com/random/200x200?playlist=3' 
-          },
-        ]
-      };
+    try {
+      let searchResults;
       
-      // Filter based on search query
-      if (query.trim() !== '') {
-        const queryLower = query.toLowerCase();
+      if (isAuthenticated) {
+        // Fetch from API for authenticated users
+        const response = await fetch(`${API_URL}/search?q=${encodeURIComponent(query)}`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch search results');
+        }
+
+        searchResults = await response.json();
         
-        const filteredResults = {
-          songs: mockResults.songs.filter(song => 
-            song.title.toLowerCase().includes(queryLower) || 
-            song.artist.toLowerCase().includes(queryLower)
-          ),
-          artists: mockResults.artists.filter(artist => 
-            artist.name.toLowerCase().includes(queryLower)
-          ),
-          albums: mockResults.albums.filter(album => 
-            album.title.toLowerCase().includes(queryLower) || 
-            album.artist.toLowerCase().includes(queryLower)
-          ),
-          playlists: mockResults.playlists.filter(playlist => 
-            playlist.title.toLowerCase().includes(queryLower)
-          )
-        };
-        
-        setResults(filteredResults);
+        // Save search history to database
+        await fetch(`${API_URL}/search-history`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          body: JSON.stringify({
+            query,
+            type: 'text',
+            timestamp: new Date().toISOString()
+          })
+        });
       } else {
-        setResults(mockResults);
+        // For guest users, first check localStorage
+        const storedResults = localStorage.getItem(`search_${query}`);
+        if (storedResults) {
+          searchResults = JSON.parse(storedResults);
+        } else {
+          // If not in localStorage, fetch from API without auth
+          const response = await fetch(`${API_URL}/search?q=${encodeURIComponent(query)}`);
+          if (!response.ok) {
+            throw new Error('Failed to fetch search results');
+          }
+          searchResults = await response.json();
+          
+          // Store in localStorage for future use
+          localStorage.setItem(`search_${query}`, JSON.stringify(searchResults));
+          
+          // Save to local search history
+          const searchHistory = JSON.parse(localStorage.getItem('searchHistory') || '[]');
+          searchHistory.unshift({
+            id: Date.now(),
+            query,
+            type: 'text',
+            timestamp: new Date().toISOString(),
+            results: searchResults.songs.length + searchResults.artists.length
+          });
+          localStorage.setItem('searchHistory', JSON.stringify(searchHistory.slice(0, 50))); // Keep last 50 searches
+        }
       }
       
+      setResults(searchResults);
+    } catch (error) {
+      console.error('Search error:', error);
+      // Handle error appropriately
+    } finally {
       setIsLoading(false);
-    }, 800);
+    }
   };
 
   const handleSearch = (e) => {

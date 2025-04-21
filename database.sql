@@ -147,11 +147,22 @@ CREATE TABLE user_song_interactions (
     play_count INTEGER DEFAULT 0,
     is_liked BOOLEAN DEFAULT false,
     skip BOOLEAN DEFAULT false,
+    skip_time_seconds INTEGER DEFAULT NULL,
     search_count INTEGER DEFAULT 0,
     last_played TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, song_id)
 );
 
+-- Create search history table
+CREATE TABLE search_history (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    query TEXT NOT NULL,
+    search_type VARCHAR(50) NOT NULL, -- 'text', 'voice', or 'recognition'
+    song_identified VARCHAR(255), -- For recognition results
+    results_count INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 -- Create indexes for better query performance
 CREATE INDEX idx_songs_artist_id ON songs(artist_id);
@@ -164,6 +175,8 @@ CREATE INDEX idx_recently_played_played_at ON recently_played(played_at);
 CREATE INDEX idx_oauth_tokens_user_id ON oauth_tokens(user_id);
 CREATE INDEX idx_oauth_tokens_provider ON oauth_tokens(provider);
 CREATE INDEX idx_user_favorite_genres_user_id ON user_favorite_genres(user_id);
+CREATE INDEX idx_search_history_user_id ON search_history(user_id);
+CREATE INDEX idx_search_history_created_at ON search_history(created_at);
 
 -- Insert sample data
 INSERT INTO genres (name, description) VALUES
@@ -172,4 +185,15 @@ INSERT INTO genres (name, description) VALUES
 ('Hip Hop', 'Hip hop music'),
 ('Electronic', 'Electronic music'),
 ('Jazz', 'Jazz music');
+
+-- New indexes
+CREATE INDEX IF NOT EXISTS idx_songs_genre_id ON songs(genre_id);
+CREATE INDEX IF NOT EXISTS idx_songs_artist_id ON songs(artist_id);
+CREATE INDEX IF NOT EXISTS idx_songs_mood ON songs(mood);
+CREATE INDEX IF NOT EXISTS idx_songs_year ON songs(year);
+CREATE INDEX IF NOT EXISTS idx_songs_plays ON songs(plays);
+CREATE INDEX IF NOT EXISTS idx_songs_title_lower ON songs(LOWER(title));
+CREATE INDEX IF NOT EXISTS idx_artists_name_lower ON artists(LOWER(name));
+CREATE INDEX IF NOT EXISTS idx_genres_name_lower ON genres(LOWER(name));
+CREATE INDEX IF NOT EXISTS idx_albums_title_lower ON albums(LOWER(title));
 
